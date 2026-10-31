@@ -1,0 +1,13 @@
+{
+  "name": "pre-commit",
+  "version": "1.0.0",
+  "description": "Pre-commit hook that blocks commits containing secrets using the COMMIT SINS scanner.",
+  "bin": {
+    "pre-commit": "./pre-commit.ts"
+  },
+  "scripts": {
+    "install:hook": "node -e \"require('fs').existsSync('.git/hooks/pre-commit') || require('fs').symlinkSync('../server/scripts/pre-commit.ts', '.git/hooks/pre-commit')\"",
+    "uninstall:hook": "rm -f .git/hooks/pre-commit"
+  },
+  "license": "MIT"
+}

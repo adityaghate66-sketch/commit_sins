@@ -1,7 +1,13 @@
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
-import { ENV } from './_core/env';
+import {
+  InsertSavedScan,
+  InsertUser,
+  savedScans,
+  users,
+  type SavedScan,
+} from "../drizzle/schema";
+import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -55,8 +61,8 @@ export async function upsertUser(user: InsertUser): Promise<void> {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
-      values.role = 'admin';
-      updateSet.role = 'admin';
+      values.role = "admin";
+      updateSet.role = "admin";
     }
 
     if (!values.lastSignedIn) {
@@ -88,4 +94,47 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+// Saved scans
+export async function getSavedScansByOpenId(openId: string) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(savedScans).where(eq(savedScans.ownerOpenId, openId));
+}
+
+export async function getSavedScanById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(savedScans).where(eq(savedScans.id, id)).limit(1);
+  return result[0] ?? undefined;
+}
+
+// Simplified insert that matches what drizzle-orm 0.44 generates for MySQL.
+// The .returning() call isn't part of the public MySQL driver API, so we
+// execute the write and then read the row back by its primary key.
+export async function createSavedScan(scan: InsertSavedScan) {
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database is not available");
+  }
+  await db.insert(savedScans).values(scan);
+}
+
+export async function upsertSavedScan(scan: InsertSavedScan): Promise<SavedScan | null> {
+  const db = await getDb();
+  if (!db) throw new Error("Database is not available");
+
+  // Insert or update on duplicate key.
+  await db.insert(savedScans).values(scan).onDuplicateKeyUpdate({ set: scan });
+
+  // Read the row back by its owner and filename (matches the generated id).
+  const result = await db.select().from(savedScans).where(eq(savedScans.ownerOpenId, scan.ownerOpenId)).limit(1);
+  return result[0] ?? null;
+}
+
+export async function deleteSavedScan(id: number): Promise<boolean> {
+  const db = await getDb();
+  if (!db) return false;
+
+  const result = await db.delete(savedScans).where(eq(savedScans.id, id));
+  return (result as any).affectedRows > 0;
+}

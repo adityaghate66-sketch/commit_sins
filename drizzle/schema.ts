@@ -1,17 +1,8 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
 
-/**
- * Core user table backing auth flow.
- * Extend this file with additional tables as your product grows.
- * Columns use camelCase to match both database fields and generated types.
- */
+/** Core user table backing auth flow. */
 export const users = mysqlTable("users", {
-  /**
-   * Surrogate primary key. Auto-incremented numeric value managed by the database.
-   * Use this for relations between tables.
-   */
   id: int("id").autoincrement().primaryKey(),
-  /** Manus OAuth identifier (openId) returned from the OAuth callback. Unique per user. */
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
@@ -22,7 +13,23 @@ export const users = mysqlTable("users", {
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
+/** Saved scan results so users can review past verdicts later. */
+export const savedScans = mysqlTable("saved_scans", {
+  id: int("id").autoincrement().primaryKey(),
+  ownerOpenId: varchar("ownerOpenId", { length: 64 }).notNull(),
+  /** Pointer to the user who saved this scan. */
+  userId: int("userId").notNull(),
+  fileName: varchar("fileName", { length: 240 }).notNull(),
+  content: text("content").notNull(),
+  summary: text("summary").notNull(),
+  findings: json("findings").notNull().default([]),
+  status: mysqlEnum("status", ["blocked", "clean"]).notNull(),
+  maskedValues: json("maskedValues").notNull().default([]),
+  machineId: varchar("machineId", { length: 128 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
-
-// TODO: Add your tables here
+export type SavedScan = typeof savedScans.$inferSelect;
+export type InsertSavedScan = typeof savedScans.$inferInsert;
