@@ -18,6 +18,8 @@
     "test:api": "npm --prefix backend test",
     "test:all": "pnpm test && pnpm test:api",
     "hooks:install": "node scripts/install-hooks.js",
+    "scan": "node scripts/scan-changed.js --staged",
+    "scan:repo": "node scripts/scan-changed.js --all",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "db:migrate": "drizzle-kit migrate",
     "build:static": "vite build"

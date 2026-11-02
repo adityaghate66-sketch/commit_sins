@@ -39,6 +39,10 @@ const ENTROPY_DISCLAIMER =
  * minDistinctCharacters    guards against "aaaa...b" style near-repeats
  * requireMixedCharacterClasses  require at least two of lowercase / uppercase /
  *                          digits / symbols, which filters plain words
+ * requireDigitOrSymbol     a purely alphabetic run is far more likely to be a
+ *                          camelCase identifier ("dangerouslySetInnerHTML") than
+ *                          a generated credential; require at least one digit or
+ *                          a strong separator such as - + / =
  * rejectWhitespace         prose contains spaces; credentials essentially never do
  * maxLowercaseRatio        natural-language words and URL/path slugs are almost
  *                          entirely lowercase, random tokens are not
@@ -48,12 +52,19 @@ const DEFAULT_OPTIONS = Object.freeze({
   threshold: 4.0,
   minDistinctCharacters: 10,
   requireMixedCharacterClasses: true,
+  requireDigitOrSymbol: true,
   rejectWhitespace: true,
   maxLowercaseRatio: 0.8,
 });
 
 /** `https://`, `git+ssh://`, ... a credential never carries a URL scheme. */
 const URL_PATTERN = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/** `/webdev.v1.Service/Method` — an RPC route, not a credential. */
+const ROUTE_PATTERN = /^\/[A-Za-z0-9._/-]+$/;
+
+/** `images.v1.ImageService/ListModels` — a protobuf service route. */
+const SERVICE_PATH_PATTERN = /^[A-Za-z][A-Za-z0-9]*\.v\d+\.[A-Za-z0-9]+\//;
 
 /** Values that are obviously documentation rather than credentials. */
 const PLACEHOLDER_PATTERN =
@@ -200,8 +211,26 @@ function analyzeString(input, options = {}) {
     return analysis;
   }
 
-  if (URL_PATTERN.test(input)) {
-    analysis.reasons.push('looks like a URL rather than a credential');
+  if (
+    settings.requireDigitOrSymbol &&
+    !/[0-9]/.test(input) &&
+    !/[+/=\-]/.test(input)
+  ) {
+    analysis.reasons.push(
+      'has no digits or strong separators, so it reads as an identifier or word'
+    );
+    return analysis;
+  }
+
+  if (
+    URL_PATTERN.test(input) ||
+    ROUTE_PATTERN.test(input) ||
+    SERVICE_PATH_PATTERN.test(input) ||
+    // `WebDevAuthPublicService/ExchangeToken`-style path segments contain no
+    // digits and read as identifiers, not as generated credential material.
+    (input.includes('/') && !/[0-9]/.test(input))
+  ) {
+    analysis.reasons.push('looks like a URL, route or path rather than a credential');
     return analysis;
   }
 

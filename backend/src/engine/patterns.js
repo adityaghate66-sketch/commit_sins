@@ -35,7 +35,9 @@ const VALUE_PLACEHOLDER_GUARD = [
   // process.env.X, ${VAR}, <PLACEHOLDER>, {{ var }}
   '(?!(?:process\\.env|\\$\\{|<|\\{\\{))',
   // your / example / changeme / todo ... prefixed values
-  '(?!(?:your|my|our|example|sample|demo|dummy|fake|mock|test|placeholder|changeme|change[_-]?me|replace[_-]?me|insert|todo|redacted|none|null|undefined|password|passwd|secret))',
+  '(?!(?:your|my|our|example|sample|demo|dummy|fake|mock|test|placeholder|changeme|change[_-]?me|replace[_-]?me|insert|todo|redacted|none|null|undefined|password|passwd|secret|token))',
+  // property access on a local object, e.g. `token.accessToken` or `config.apiKey`
+  '(?![A-Za-z_$][A-Za-z0-9_$]*\\.[A-Za-z_$])',
   // xxxxxxxx style filler
   '(?![A-Za-z0-9_\\-]*[Xx]{8})',
 ].join('');
@@ -57,7 +59,12 @@ const PASSWORD_VALUE = [
   '(?:"' + VALUE_PLACEHOLDER_GUARD + '[^"\\r\\n]{8,}")',
   "(?:'" + VALUE_PLACEHOLDER_GUARD + "[^'\\r\\n]{8,}')",
   '(?:`' + VALUE_PLACEHOLDER_GUARD + '[^`\\r\\n]{8,}`)',
-  '(?:' + VALUE_PLACEHOLDER_GUARD + '[^\\s"\'`]{8,})',
+  // An unquoted value must be a standalone token. Excluding brackets,
+  // parentheses and quotes stops code such as `password = body.files[0]`
+  // from being mistaken for a credential.
+  '(?:' +
+    VALUE_PLACEHOLDER_GUARD +
+    '[A-Za-z0-9_+./=!@#$%^&*-]{8,})(?=["\'`;,\\s}]|$)',
 ].join('|');
 
 const patterns = [
@@ -96,7 +103,10 @@ const patterns = [
         API_KEY_LABEL +
         '["\']?\\s*[:=]\\s*["\'`]?' +
         VALUE_PLACEHOLDER_GUARD +
-        '[A-Za-z0-9_\\-.+/=]{16,}',
+        '[A-Za-z0-9_\\-.+/=]{16,}' +
+        // The value must end like a standalone token, so a call expression
+        // such as `API_KEY = encodeURIComponent(...)` is not a finding.
+        '(?=["\'`;,\\s}\\)]|$)',
       'i'
     ),
   },

@@ -34,11 +34,26 @@ const MAX_MASK_LENGTH = 8;
 const SEVERITY_ORDER = Object.freeze(['critical', 'high', 'medium', 'low']);
 
 /**
+ * Generated files contain hashes, integrity digests and minified identifiers
+ * that are high entropy but never credentials. Pattern rules still run on
+ * them; only the entropy heuristic is suppressed to avoid drowning a report in
+ * lockfile noise.
+ */
+const GENERATED_PATH_PATTERN =
+  /(?:^|\/)(?:package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|composer\.lock|Cargo\.lock|Gemfile\.lock|poetry\.lock|Pipfile\.lock)(?:$|\/)|\.min\.(?:js|css)$|\.map$|(?:^|\/)(?:dist|build|coverage|vendor|node_modules)\//;
+
+/** True when entropy scoring should be skipped for this reported filename. */
+function isGeneratedPath(filename) {
+  return typeof filename === 'string' && GENERATED_PATH_PATTERN.test(filename);
+}
+
+/**
  * Defaults for scanContent.
  *
  * patterns        null means the shared library in patterns.js
  * enableEntropy   add entropy candidates for values no pattern matched
  * entropyThreshold / entropyMinLength  forwarded to entropy.js
+ * entropySkipGeneratedFiles  keep lockfiles and build output out of entropy noise
  * maxFindings     hard cap so a huge file cannot produce an unbounded report
  */
 const DEFAULT_SCAN_OPTIONS = Object.freeze({
@@ -46,6 +61,7 @@ const DEFAULT_SCAN_OPTIONS = Object.freeze({
   enableEntropy: true,
   entropyThreshold: ENTROPY_DEFAULTS.threshold,
   entropyMinLength: ENTROPY_DEFAULTS.minLength,
+  entropySkipGeneratedFiles: true,
   maxFindings: 500,
 });
 
@@ -206,6 +222,10 @@ function scanContent(content, filename = '<unknown>', options = {}) {
   const settings = { ...DEFAULT_SCAN_OPTIONS, ...(options || {}) };
   const text = normalizeContent(content);
   const activePatterns = resolvePatterns(settings.patterns);
+
+  settings.enableEntropy =
+    Boolean(settings.enableEntropy) &&
+    !(settings.entropySkipGeneratedFiles && isGeneratedPath(filename));
 
   const maxFindings = Number.isFinite(settings.maxFindings)
     ? Math.max(1, Math.floor(settings.maxFindings))

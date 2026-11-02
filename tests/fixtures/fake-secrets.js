@@ -13,13 +13,20 @@
  */
 
 // --- synthetic values, split so the on-disk file never holds a full token ---
-const AWS_ACCESS_KEY_ID = 'AKIA' + 'Z7Q2XWPLM4RTV8NY';
-const GENERIC_API_KEY = 'q7Zx' + '9LmP2vTn8RbW4yHs6JdK';
-const DATABASE_PASSWORD = 'S3cure' + 'P@ssw0rd!';
-const GITHUB_TOKEN = 'ghp_' + 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8';
+// Fragments stay short enough that a repository-wide entropy scan does not
+// mistake this fixture for a leaked credential. Only the assembled `content`
+// below contains complete (still fake) values.
+const AWS_ACCESS_KEY_ID = 'AKIA' + 'Z7Q2' + 'XWPL' + 'M4RT' + 'V8NY';
+const GENERIC_API_KEY = 'q7Zx' + '9LmP' + '2vTn' + '8RbW' + '4yHs' + '6JdK';
+const DATABASE_PASSWORD = 'S3cure' + 'P@ss' + 'w0rd!';
+const GITHUB_TOKEN =
+  'ghp_' + 'a1B2c3' + 'D4e5F6' + 'g7H8i9' + 'J0k1L2' + 'm3N4o5' + 'P6q7R8';
 const GITHUB_FINE_GRAINED_TOKEN =
-  'github_pat_' + 'A1b2C3d4E5f6G7h8I9j0'.repeat(4) + 'K1';
-const HIGH_ENTROPY_SEED = 'kR8vQ2mZ' + 'xT7pL4nWbY6jHs9C';
+  'github_pat_' +
+  ['A1b2C', '3d4E5', 'f6G7h', '8I9j0'].join('').repeat(4) +
+  'K1';
+const HIGH_ENTROPY_SEED = 'kR8v' + 'Q2mZ' + 'xT7p' + 'L4nW' + 'bY6j' + 'Hs9C';
+const PRIVATE_KEY_HEADER = '-----BEGIN ' + 'RSA ' + 'PRIVATE KEY-----';
 
 /**
  * Scannable text. Line numbers are stable and intentional:
@@ -39,7 +46,7 @@ const content = [
   `const db_password = '${DATABASE_PASSWORD}';`,
   `const githubToken = '${GITHUB_TOKEN}';`,
   `const githubFineGrained = '${GITHUB_FINE_GRAINED_TOKEN}';`,
-  '-----BEGIN RSA PRIVATE KEY-----',
+  PRIVATE_KEY_HEADER,
   `const signingSeed = '${HIGH_ENTROPY_SEED}';`,
   '',
 ].join('\n');
@@ -51,7 +58,7 @@ const secrets = [
   { type: 'password-assignment', value: DATABASE_PASSWORD },
   { type: 'github-token', value: GITHUB_TOKEN },
   { type: 'github-token', value: GITHUB_FINE_GRAINED_TOKEN },
-  { type: 'private-key-header', value: '-----BEGIN RSA PRIVATE KEY-----' },
+  { type: 'private-key-header', value: PRIVATE_KEY_HEADER },
   { type: 'high-entropy-string', value: HIGH_ENTROPY_SEED },
 ];
 
