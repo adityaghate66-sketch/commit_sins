@@ -2,18 +2,23 @@
   "name": "commitsins",
   "version": "1.0.0",
   "type": "module",
-  "license": "MIT",  "scripts": {
-    "dev": "NODE_ENV=development tsx watch server/_core/index.ts",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "dev:api": "npm --prefix backend run dev",
+    "dev:static": "vite --host 0.0.0.0 --port ${PORT:-3000} --strictPort",
     "build": "pnpm build:client && pnpm build:server",
     "build:client": "vite build",
     "build:server": "esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
+    "start:api": "node backend/src/server.js",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
     "test": "vitest run",
+    "test:api": "npm --prefix backend test",
+    "test:all": "pnpm test && pnpm test:api",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "db:migrate": "drizzle-kit migrate",
-    "dev:static": "vite --host 0.0.0.0 --port ${PORT:-3000} --strictPort",
     "build:static": "vite build"
   },
   "dependencies": {
