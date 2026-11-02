@@ -6,7 +6,6 @@ import {
   ChevronRight,
   CircleHelp,
   Clipboard,
-  Code2,
   ExternalLink,
   FileCode2,
   Files,
@@ -27,29 +26,13 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-type Severity = "critical" | "high" | "medium" | "low";
-type Finding = {
-  id: string;
-  fileName: string;
-  line: number;
-  type: string;
-  severity: Severity;
-  maskedValue: string;
-  remediation: string;
-};
-type ScanResult = {
-  status: "clean" | "blocked";
-  summary: {
-    filesScanned: number;
-    findings: number;
-    critical: number;
-    high: number;
-    medium: number;
-    low: number;
-    durationMs: number;
-  };
-  findings: Finding[];
-};
+import {
+  findingTypeLabel,
+  requestScan,
+  type ScanResult,
+  type Severity,
+} from "@/lib/scanApi";
+
 type Sample = {
   name: string;
   language: string;
@@ -57,7 +40,47 @@ type Sample = {
   state: "blocked" | "clean";
 };
 
+type FileEntry = {
+  id: string;
+  name: string;
+  language: string;
+  content: string;
+};
+
+type ScanState = "idle" | "scanning" | "complete" | "error";
+
 type NavItem = { label: string; icon: typeof ScanLine; target: string };
+
+const MAX_FILES = 100;
+const MAX_FILE_BYTES = 1_000_000;
+const MAX_TOTAL_BYTES = 5_000_000;
+
+/**
+ * Sample credentials are assembled at runtime.
+ *
+ * Keeping the fragments separate means this dashboard file itself can be
+ * scanned by the pre-commit hook without reporting its own demo fixtures.
+ */
+const sampleAwsKey = ["AKIA", "ZZZZ", "ZZZZ", "ZZZZ", "ZZZZ"].join("");
+const sampleGenericKey = [
+  "sk_",
+  "test_",
+  "commit_",
+  "sins_demo_",
+  "123456789",
+].join("");
+const sampleGithubToken = [
+  "ghp_",
+  "Ab3Kx9",
+  "Qm2Wp7",
+  "Zt4Nv8",
+  "Rc5Hd1",
+  "Ls6Jy3",
+  "Bf0Gu4",
+].join("");
+const samplePassword = ["Relay", "_", "rotate", "_", "this", "_", "now"].join(
+  ""
+);
 
 const samples: Sample[] = [
   {
@@ -66,8 +89,8 @@ const samples: Sample[] = [
     state: "blocked",
     content: `export const cloud = {
   region: "us-east-1",
-  accessKeyId: "AKIAZZZZZZZZZZZZZZZZ",
-  apiKey: "sk_test_COMMIT_SINS_DEMO_123456789",
+  accessKeyId: "${sampleAwsKey}",
+  apiKey: "${sampleGenericKey}",
   endpoint: "https://api.internal.local",
 };
 
@@ -83,8 +106,8 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: "ghp_SYNTHETIC_NOT_A_REAL_TOKEN_1234567890"
-      password: "demo-only-password-rotate-me"
+      GITHUB_TOKEN: "${sampleGithubToken}"
+      password: "${samplePassword}"
     steps:
       - uses: actions/checkout@v4`,
   },
@@ -103,56 +126,53 @@ export const runtime = {
   },
 ];
 
-const demoFindings: Finding[] = [
-  {
-    id: "demo-1",
-    fileName: "config.ts",
-    line: 3,
-    type: "AWS access key",
-    severity: "critical",
-    maskedValue: "AKI••••••••••••ZZ",
-    remediation:
-      "Revoke the key, rotate the credential, and load it from the runtime secret store.",
-  },
-  {
-    id: "demo-2",
-    fileName: "config.ts",
-    line: 4,
-    type: "Generic API key",
-    severity: "medium",
-    maskedValue: "sk_••••••••••••••••89",
-    remediation:
-      "Move the value to an environment variable and keep the secret out of Git history.",
-  },
-];
-
-const cleanResult = (durationMs = 11): ScanResult => ({
-  status: "clean",
-  summary: {
-    filesScanned: 1,
-    findings: 0,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    durationMs,
-  },
-  findings: [],
-});
-
-const demoResult: ScanResult = {
-  status: "blocked",
-  summary: {
-    filesScanned: 1,
-    findings: 2,
-    critical: 1,
-    high: 0,
-    medium: 1,
-    low: 0,
-    durationMs: 18,
-  },
-  findings: demoFindings,
+const LANGUAGE_BY_EXTENSION: Record<string, string> = {
+  cjs: "JavaScript",
+  css: "CSS",
+  env: "Environment",
+  go: "Go",
+  html: "HTML",
+  js: "JavaScript",
+  json: "JSON",
+  jsx: "JavaScript",
+  md: "Markdown",
+  py: "Python",
+  rb: "Ruby",
+  rs: "Rust",
+  sh: "Shell",
+  sql: "SQL",
+  toml: "TOML",
+  ts: "TypeScript",
+  tsx: "TypeScript",
+  txt: "Text",
+  yaml: "YAML",
+  yml: "YAML",
 };
+
+function languageFor(name: string): string {
+  const extension = name.toLowerCase().split(".").pop() ?? "";
+  return LANGUAGE_BY_EXTENSION[extension] ?? "Text";
+}
+
+function newFileId(name: string): string {
+  const suffix =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${name}:${suffix}`;
+}
+
+function fileFromSample(sample: Sample): FileEntry {
+  return {
+    id: `sample:${sample.name}`,
+    name: sample.name,
+    language: sample.language,
+    content: sample.content,
+  };
+}
+
+const initialFile = fileFromSample(samples[0]);
+
 
 const navItems: NavItem[] = [
   { label: "Scan workspace", icon: ScanLine, target: "scan-workspace" },
@@ -174,25 +194,40 @@ function statusCopy(result: ScanResult) {
 }
 
 export default function Home() {
-  const [selectedSample, setSelectedSample] = useState<Sample>(samples[0]);
-  const [content, setContent] = useState(samples[0].content);
-  const [scanResult, setScanResult] = useState<ScanResult>(demoResult);
-  const [scanState, setScanState] = useState<
-    "idle" | "scanning" | "complete" | "error"
-  >("complete");
+  const [files, setFiles] = useState<FileEntry[]>([initialFile]);
+  const [activeFileId, setActiveFileId] = useState(initialFile.id);
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
+  const [scanState, setScanState] = useState<ScanState>("idle");
   const [error, setError] = useState("");
   const [activeNav, setActiveNav] = useState("Scan workspace");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [lastScan, setLastScan] = useState("2m ago");
+  const [lastScan, setLastScan] = useState("not yet");
   const fileInput = useRef<HTMLInputElement>(null);
+  const scanRequestId = useRef(0);
 
-  const lines = useMemo(() => content.split("\n"), [content]);
-  const findingLines = useMemo(
-    () => new Set(scanResult.findings.map(finding => finding.line)),
-    [scanResult.findings]
+  const activeFile =
+    files.find(file => file.id === activeFileId) ?? files[0] ?? null;
+  const lines = useMemo(
+    () => activeFile?.content.split("\n") ?? [""],
+    [activeFile?.content]
   );
+  const findingLines = useMemo(() => {
+    if (!scanResult || !activeFile) return new Set<number>();
+    return new Set(
+      scanResult.findings
+        .filter(finding => finding.fileName === activeFile.name)
+        .map(finding => finding.line)
+    );
+  }, [scanResult, activeFile]);
+
+  const invalidateScan = () => {
+    scanRequestId.current += 1;
+    setScanResult(null);
+    setScanState("idle");
+    setError("");
+  };
 
   const jumpTo = (item: NavItem) => {
     setActiveNav(item.label);
@@ -203,43 +238,79 @@ export default function Home() {
   };
 
   const chooseSample = (sample: Sample) => {
-    setSelectedSample(sample);
-    setContent(sample.content);
-    setScanResult(sample.state === "blocked" ? demoResult : cleanResult());
-    setScanState("complete");
-    setError("");
+    const sampleFile = fileFromSample(sample);
+    setFiles(current =>
+      current.some(file => file.id === sampleFile.id)
+        ? current
+        : [...current, sampleFile]
+    );
+    setActiveFileId(sampleFile.id);
+    invalidateScan();
+  };
+
+  const updateActiveContent = (value: string) => {
+    if (!activeFile) return;
+    setFiles(current =>
+      current.map(file =>
+        file.id === activeFile.id ? { ...file, content: value } : file
+      )
+    );
+    invalidateScan();
   };
 
   const runScan = async () => {
-    if (!content.trim()) {
-      setError("Add some code before scanning.");
+    if (files.length === 0) {
+      setError("Add at least one file before scanning.");
       setScanState("error");
       return;
     }
+
+    if (files.length > MAX_FILES) {
+      setError(`The workspace supports at most ${MAX_FILES} files per scan.`);
+      setScanState("error");
+      return;
+    }
+
+    const oversized = files.find(
+      file => new TextEncoder().encode(file.content).length > MAX_FILE_BYTES
+    );
+    if (oversized) {
+      setError(`${oversized.name} is larger than the 1 MB per-file limit.`);
+      setScanState("error");
+      return;
+    }
+
+    const totalBytes = files.reduce(
+      (total, file) => total + new TextEncoder().encode(file.content).length,
+      0
+    );
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      setError("The selection is larger than the 5 MB per-scan limit.");
+      setScanState("error");
+      return;
+    }
+
+    const requestId = ++scanRequestId.current;
     setScanState("scanning");
     setError("");
+
     try {
-      const response = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          files: [{ fileName: selectedSample.name, content }],
-        }),
-      });
-      const payload = (await response.json()) as ScanResult & {
-        error?: string;
-      };
-      if (!response.ok)
-        throw new Error(payload.error || "The scan could not complete.");
-      setScanResult(payload);
+      const result = await requestScan(
+        files.map(file => ({ fileName: file.name, content: file.content }))
+      );
+      if (requestId !== scanRequestId.current) return;
+
+      setScanResult(result);
       setScanState("complete");
       setLastScan("just now");
       toast.success(
-        payload.status === "blocked"
+        result.status === "blocked"
           ? "Scan complete — commit blocked"
           : "Scan complete — safe to commit"
       );
     } catch (scanError) {
+      if (requestId !== scanRequestId.current) return;
+
       setScanState("error");
       setError(
         scanError instanceof Error
@@ -250,34 +321,153 @@ export default function Home() {
     }
   };
 
-  const handleFileUpload = async (file?: File) => {
-    if (!file) return;
-    if (file.size > 250_000) {
-      setError("That file is larger than the 250 KB scan limit.");
+  const handleFileUpload = async (selected: FileList | null) => {
+    if (!selected || selected.length === 0) return;
+
+    const incoming = Array.from(selected);
+    const oversized = incoming.filter(file => file.size > MAX_FILE_BYTES);
+    const readable = incoming.filter(file => file.size <= MAX_FILE_BYTES);
+
+    if (readable.length === 0) {
+      setError(
+        `Every selected file is larger than the 1 MB per-file limit (${oversized.length}).`
+      );
       setScanState("error");
+      if (fileInput.current) fileInput.current.value = "";
       return;
     }
-    try {
-      const text = await file.text();
-      const uploaded: Sample = {
-        name: file.name,
-        language: "Uploaded file",
-        content: text,
-        state: "blocked",
-      };
-      setSelectedSample(uploaded);
-      setContent(text);
-      setScanResult(cleanResult(0));
-      setScanState("idle");
-      setError("");
-      toast.success(`${file.name} loaded. Run a scan when ready.`);
-    } catch {
-      setError("This file could not be read in the browser.");
+
+    const settled = await Promise.allSettled(
+      readable.map(async file => ({ file, content: await file.text() }))
+    );
+    const loaded = settled
+      .filter(
+        (
+          item
+        ): item is PromiseFulfilledResult<{ file: File; content: string }> =>
+          item.status === "fulfilled"
+      )
+      .map(item => item.value);
+    const failed = settled.length - loaded.length;
+
+    if (loaded.length === 0) {
+      setError("The selected files could not be read in the browser.");
       setScanState("error");
-    } finally {
       if (fileInput.current) fileInput.current.value = "";
+      return;
     }
+
+    const nextFiles = [...files];
+    let focusId = "";
+    let skipped = 0;
+
+    for (const item of loaded) {
+      const index = nextFiles.findIndex(file => file.name === item.file.name);
+
+      if (index >= 0) {
+        nextFiles[index] = {
+          ...nextFiles[index],
+          language: languageFor(item.file.name),
+          content: item.content,
+        };
+        focusId = focusId || nextFiles[index].id;
+        continue;
+      }
+
+      if (nextFiles.length >= MAX_FILES) {
+        skipped += 1;
+        continue;
+      }
+
+      const entry: FileEntry = {
+        id: newFileId(item.file.name),
+        name: item.file.name,
+        language: languageFor(item.file.name),
+        content: item.content,
+      };
+      nextFiles.push(entry);
+      focusId = focusId || entry.id;
+    }
+
+    const notes: string[] = [];
+    if (oversized.length > 0) {
+      notes.push(
+        `${oversized.length} file${oversized.length === 1 ? "" : "s"} exceeded the 1 MB per-file limit.`
+      );
+    }
+    if (failed > 0) {
+      notes.push(
+        `${failed} file${failed === 1 ? "" : "s"} could not be read.`
+      );
+    }
+    if (skipped > 0) {
+      notes.push(
+        `${skipped} file${skipped === 1 ? "" : "s"} skipped at the ${MAX_FILES}-file workspace limit.`
+      );
+    }
+
+    scanRequestId.current += 1;
+    setFiles(nextFiles);
+    setActiveFileId(focusId);
+    setScanResult(null);
+    setScanState("idle");
+    setError(notes.join(" "));
+
+    if (notes.length > 0) {
+      toast.warning("Some files were not added. Check the note below.");
+    } else {
+      toast.success(
+        `${loaded.length} file${loaded.length === 1 ? "" : "s"} loaded. Run a scan when ready.`
+      );
+    }
+
+    if (fileInput.current) fileInput.current.value = "";
   };
+
+  const removeFile = (id: string) => {
+    const remaining = files.filter(file => file.id !== id);
+    setFiles(remaining);
+    if (activeFileId === id) setActiveFileId(remaining[0]?.id ?? "");
+    scanRequestId.current += 1;
+    setScanResult(null);
+    setScanState("idle");
+    setError("");
+  };
+
+  const badgeTone =
+    scanState === "complete" && scanResult ? scanResult.status : scanState;
+  const badgeLabel =
+    scanState === "complete" && scanResult
+      ? statusCopy(scanResult)
+      : scanState === "scanning"
+        ? "Scanning"
+        : scanState === "error"
+          ? "Scan failed"
+          : "Awaiting scan";
+
+  let verdictIcon = <ScanLine size={22} />;
+  let verdictTitle = "No scan yet";
+  let verdictBody = "Scan the workspace to see whether this commit would be allowed.";
+
+  if (scanState === "scanning") {
+    verdictIcon = <span className="button-spinner dark" />;
+    verdictTitle = `Scanning ${files.length} ${files.length === 1 ? "file" : "files"}`;
+    verdictBody = "Checking every staged file against the detection rules.";
+  } else if (scanState === "error") {
+    verdictIcon = <AlertTriangle size={22} />;
+    verdictTitle = "Scan could not complete";
+    verdictBody = "Nothing was changed. Review the message and try again.";
+  } else if (scanState === "complete" && scanResult) {
+    if (scanResult.status === "blocked") {
+      verdictIcon = <X size={22} />;
+      verdictTitle = "Unsafe code detected";
+      verdictBody = "Fix the findings below before committing.";
+    } else {
+      verdictIcon = <Check size={22} />;
+      verdictTitle = "No secrets detected";
+      verdictBody = `${scanResult.summary.filesScanned} ${scanResult.summary.filesScanned === 1 ? "file is" : "files are"} clear to commit.`;
+    }
+  }
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -520,20 +710,23 @@ export default function Home() {
                 </div>
               </div>
               <div className="file-count">
-                <Files size={15} /> 1 file
+                <Files size={15} /> {files.length}{" "}
+                {files.length === 1 ? "file" : "files"}
               </div>
             </div>
             <div className="sample-tabs">
               <div className="sample-tabs-label">
                 <span className="eyebrow">SAMPLE FILES</span>
-                <span className="sample-hint">safe synthetic fixtures</span>
+                <span className="sample-hint">
+                  safe synthetic fixtures · add as many as you need
+                </span>
               </div>
               <div className="sample-buttons">
                 {samples.map(sample => (
                   <button
                     type="button"
                     key={sample.name}
-                    className={`sample-button ${selectedSample.name === sample.name ? "active" : ""}`}
+                    className={`sample-button ${activeFile?.id === `sample:${sample.name}` ? "active" : ""}`}
                     onClick={() => chooseSample(sample)}
                   >
                     <FileCode2 size={14} />
@@ -548,66 +741,112 @@ export default function Home() {
                   className="upload-button"
                   onClick={() => fileInput.current?.click()}
                 >
-                  <Upload size={14} /> upload
+                  <Upload size={14} /> upload files
                 </button>
                 <input
                   ref={fileInput}
                   type="file"
                   hidden
-                  accept=".js,.ts,.tsx,.jsx,.json,.yml,.yaml,.env,.txt"
-                  onChange={event =>
-                    void handleFileUpload(event.target.files?.[0])
-                  }
+                  multiple
+                  accept=".cjs,.js,.mjs,.ts,.tsx,.jsx,.json,.yml,.yaml,.env,.txt,.md,.py,.go,.rb,.rs,.sh,.sql,.toml"
+                  onChange={event => {
+                    void handleFileUpload(event.target.files);
+                  }}
                 />
               </div>
             </div>
+            {files.length > 0 && (
+              <div className="workspace-files">
+                <span className="eyebrow">WORKSPACE FILES</span>
+                <div className="file-chips">
+                  {files.map(file => {
+                    const isActive = activeFile?.id === file.id;
+                    return (
+                      <span
+                        className={`file-chip ${isActive ? "active" : ""}`}
+                        key={file.id}
+                      >
+                        <button
+                          type="button"
+                          className="file-chip-select"
+                          aria-pressed={isActive}
+                          onClick={() => setActiveFileId(file.id)}
+                        >
+                          <FileCode2 size={13} />
+                          {file.name}
+                        </button>
+                        <button
+                          type="button"
+                          className="file-chip-remove"
+                          aria-label={`Remove ${file.name}`}
+                          title={`Remove ${file.name}`}
+                          onClick={() => removeFile(file.id)}
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             <div className="editor-wrap">
               <div className="editor-toolbar">
                 <div className="editor-file">
                   <span className="file-status-dot" />
-                  {selectedSample.name}
-                  <span className="editor-language">
-                    {selectedSample.language}
-                  </span>
+                  {activeFile?.name ?? "No file selected"}
+                  {activeFile && (
+                    <span className="editor-language">
+                      {activeFile.language}
+                    </span>
+                  )}
                 </div>
                 <span className="editor-meta">
-                  {lines.length} lines · staged
+                  {activeFile
+                    ? `${lines.length} lines · staged`
+                    : "nothing staged"}
                 </span>
               </div>
-              <div className="code-editor">
-                <div className="line-numbers" aria-hidden="true">
-                  {lines.map((_, index) => (
-                    <span
-                      key={index}
-                      className={findingLines.has(index + 1) ? "flagged" : ""}
-                    >
-                      {String(index + 1).padStart(2, "0")}
-                    </span>
-                  ))}
+              {activeFile ? (
+                <div className="code-editor">
+                  <div className="line-numbers" aria-hidden="true">
+                    {lines.map((_, index) => (
+                      <span
+                        key={index}
+                        className={findingLines.has(index + 1) ? "flagged" : ""}
+                      >
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                    ))}
+                  </div>
+                  <textarea
+                    aria-label="Code to scan"
+                    value={activeFile.content}
+                    onChange={event => updateActiveContent(event.target.value)}
+                    onKeyDown={event => {
+                      if (
+                        (event.metaKey || event.ctrlKey) &&
+                        event.key === "Enter"
+                      ) {
+                        event.preventDefault();
+                        void runScan();
+                      }
+                    }}
+                    spellCheck={false}
+                  />
                 </div>
-                <textarea
-                  aria-label="Code to scan"
-                  value={content}
-                  onChange={event => {
-                    setContent(event.target.value);
-                    setScanState("idle");
-                  }}
-                  onKeyDown={event => {
-                    if (
-                      (event.metaKey || event.ctrlKey) &&
-                      event.key === "Enter"
-                    ) {
-                      event.preventDefault();
-                      void runScan();
-                    }
-                  }}
-                  spellCheck={false}
-                />
-              </div>
+              ) : (
+                <div className="editor-empty">
+                  <FileCode2 size={22} />
+                  <strong>No files in the workspace</strong>
+                  <span>Add a sample or upload files to start a scan.</span>
+                </div>
+              )}
             </div>
             <div className="editor-footer">
               <span>
-                <span className="footer-dot" /> staged content only
+                <span className="footer-dot" /> {files.length} staged{" "}
+                {files.length === 1 ? "file" : "files"}
               </span>
               <span className="shortcut">
                 <kbd>⌘</kbd>
@@ -617,7 +856,7 @@ export default function Home() {
                 type="button"
                 className="scan-button"
                 onClick={() => void runScan()}
-                disabled={scanState === "scanning"}
+                disabled={scanState === "scanning" || files.length === 0}
               >
                 {scanState === "scanning" ? (
                   <>
@@ -625,7 +864,7 @@ export default function Home() {
                   </>
                 ) : (
                   <>
-                    <Play size={15} fill="currentColor" /> scan staged content
+                    <Play size={15} fill="currentColor" /> scan staged files
                   </>
                 )}
               </button>
@@ -649,108 +888,144 @@ export default function Home() {
                   <p>Would this commit be allowed?</p>
                 </div>
               </div>
-              <span className={`verdict-badge ${scanResult.status}`}>
-                <span /> {statusCopy(scanResult)}
+              <span className={`verdict-badge ${badgeTone}`}>
+                <span /> {badgeLabel}
               </span>
             </div>
-            <div className={`verdict-card ${scanResult.status}`}>
-              <div className="verdict-icon">
-                {scanResult.status === "blocked" ? (
-                  <X size={22} />
-                ) : (
-                  <Check size={22} />
-                )}
-              </div>
+            <div className={`verdict-card ${badgeTone}`}>
+              <div className="verdict-icon">{verdictIcon}</div>
               <div>
-                <strong>
-                  {scanResult.status === "blocked"
-                    ? "Unsafe code detected"
-                    : "No secrets detected"}
-                </strong>
-                <span>
-                  {scanResult.status === "blocked"
-                    ? "Fix the findings below before committing."
-                    : "This staged content is clear to commit."}
-                </span>
+                <strong>{verdictTitle}</strong>
+                <span>{verdictBody}</span>
               </div>
               <span className="verdict-arrow">
                 <ArrowUpRight size={18} />
               </span>
             </div>
-            <div className="result-stats">
-              <div>
-                <strong>{scanResult.summary.findings}</strong>
-                <span>findings</span>
-              </div>
-              <div>
-                <strong className="critical-text">
-                  {scanResult.summary.critical}
-                </strong>
-                <span>critical</span>
-              </div>
-              <div>
-                <strong className="high-text">{scanResult.summary.high}</strong>
-                <span>high</span>
-              </div>
-              <div>
-                <strong className="medium-text">
-                  {scanResult.summary.medium}
-                </strong>
-                <span>medium</span>
-              </div>
-            </div>
-            <div className="findings-header">
-              <span>
-                FINDINGS <b>{scanResult.summary.findings}</b>
-              </span>
-              <span>{scanResult.summary.durationMs}ms</span>
-            </div>
-            <div className="findings-list">
-              {scanResult.findings.length === 0 ? (
-                <div className="empty-findings">
-                  <ShieldCheck size={20} />
-                  <strong>Clean surface</strong>
+            {scanState === "complete" && scanResult ? (
+              <>
+                <div className="result-stats">
+                  <div>
+                    <strong>{scanResult.summary.filesScanned}</strong>
+                    <span>files</span>
+                  </div>
+                  <div>
+                    <strong>{scanResult.summary.findings}</strong>
+                    <span>findings</span>
+                  </div>
+                  <div>
+                    <strong className="critical-text">
+                      {scanResult.summary.critical}
+                    </strong>
+                    <span>critical</span>
+                  </div>
+                  <div>
+                    <strong className="high-text">
+                      {scanResult.summary.high}
+                    </strong>
+                    <span>high</span>
+                  </div>
+                  <div>
+                    <strong
+                      className={
+                        scanResult.summary.highestSeverity
+                          ? `${scanResult.summary.highestSeverity}-text`
+                          : "ok-text"
+                      }
+                    >
+                      {scanResult.summary.highestSeverity
+                        ? severityLabel(scanResult.summary.highestSeverity)
+                        : "None"}
+                    </strong>
+                    <span>risk</span>
+                  </div>
+                </div>
+                <div className="findings-header">
                   <span>
-                    No credential patterns or suspicious strings were found.
+                    FINDINGS <b>{scanResult.summary.findings}</b>
+                  </span>
+                  <span>
+                    {scanResult.summary.durationMs}ms ·{" "}
+                    {scanResult.summary.filesScanned}{" "}
+                    {scanResult.summary.filesScanned === 1 ? "file" : "files"}
                   </span>
                 </div>
-              ) : (
-                scanResult.findings.map(finding => (
-                  <article className="finding" key={finding.id}>
-                    <div className={`severity-bar ${finding.severity}`} />
-                    <div className="finding-main">
-                      <div className="finding-top">
-                        <span className={`severity-pill ${finding.severity}`}>
-                          {severityLabel(finding.severity)}
-                        </span>
-                        <span className="finding-type">{finding.type}</span>
-                        <span className="finding-location">
-                          {finding.fileName}:{finding.line}
-                        </span>
-                      </div>
-                      <div className="masked-value">
-                        <span>masked</span>
-                        <code>{finding.maskedValue}</code>
-                        <button
-                          type="button"
-                          aria-label="Copy masked value"
-                          title="Copy masked value"
-                          onClick={() => {
-                            void navigator.clipboard?.writeText(
-                              finding.maskedValue
-                            );
-                            toast.success("Masked value copied");
-                          }}
-                        >
-                          <Clipboard size={13} />
-                        </button>
-                      </div>
-                      <p>{finding.remediation}</p>
+                <div className="findings-list">
+                  {scanResult.findings.length === 0 ? (
+                    <div className="empty-findings">
+                      <ShieldCheck size={20} />
+                      <strong>Clean surface</strong>
+                      <span>
+                        No credential patterns or suspicious strings were found.
+                      </span>
                     </div>
-                  </article>
-                ))
-              )}
-            </div>
+                  ) : (
+                    scanResult.findings.map(finding => (
+                      <article className="finding" key={finding.id}>
+                        <div className={`severity-bar ${finding.severity}`} />
+                        <div className="finding-main">
+                          <div className="finding-top">
+                            <span
+                              className={`severity-pill ${finding.severity}`}
+                            >
+                              {severityLabel(finding.severity)}
+                            </span>
+                            <span className="finding-type">
+                              {findingTypeLabel(finding.type)}
+                            </span>
+                            <span className="finding-location">
+                              {finding.fileName}:{finding.line}
+                            </span>
+                          </div>
+                          <div className="masked-value">
+                            <span>masked</span>
+                            <code>{finding.maskedValue}</code>
+                            <button
+                              type="button"
+                              aria-label="Copy masked value"
+                              title="Copy masked value"
+                              onClick={() => {
+                                void navigator.clipboard?.writeText(
+                                  finding.maskedValue
+                                );
+                                toast.success("Masked value copied");
+                              }}
+                            >
+                              <Clipboard size={13} />
+                            </button>
+                          </div>
+                          <p>{finding.remediation}</p>
+                        </div>
+                      </article>
+                    ))
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className="result-placeholder">
+                {scanState === "scanning" ? (
+                  <span className="button-spinner dark" />
+                ) : scanState === "error" ? (
+                  <AlertTriangle size={20} />
+                ) : (
+                  <ScanLine size={20} />
+                )}
+                <strong>
+                  {scanState === "scanning"
+                    ? "Checking staged files"
+                    : scanState === "error"
+                      ? "No verdict was produced"
+                      : "Findings will appear here"}
+                </strong>
+                <span>
+                  {scanState === "scanning"
+                    ? "Findings will appear when the scan finishes."
+                    : scanState === "error"
+                      ? "The scan failed safely without changing anything."
+                      : "Run a scan to populate the verdict and totals."}
+                </span>
+              </div>
+            )}
             <div className="result-note">
               <LockKeyhole size={14} />
               <span>Values are masked at detection. Nothing is stored.</span>
@@ -927,9 +1202,10 @@ export default function Home() {
             </span>
             <h2 id="help-title">Scan with confidence.</h2>
             <p>
-              Choose a safe fixture or upload a source file, review the masked
-              findings, then fix and scan again. Your content is sent only to
-              the local scan endpoint for the duration of the request.
+              Choose a safe fixture or upload one or more source files, review
+              the masked findings, then fix and scan again. Your content is
+              sent only to the local scan endpoint for the duration of the
+              request.
             </p>
             <div className="help-steps">
               <span>

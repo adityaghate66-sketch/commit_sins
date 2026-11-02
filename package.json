@@ -17,6 +17,7 @@
     "test": "vitest run",
     "test:api": "npm --prefix backend test",
     "test:all": "pnpm test && pnpm test:api",
+    "hooks:install": "node scripts/install-hooks.js",
     "db:push": "drizzle-kit generate && drizzle-kit migrate",
     "db:migrate": "drizzle-kit migrate",
     "build:static": "vite build"

@@ -1,0 +1,18 @@
+#!/bin/sh
+# COMMIT SINS pre-commit hook
+# Installed by `pnpm hooks:install`. Keep hooks/pre-commit.cjs in the repo.
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+  echo "COMMIT SINS: unable to find the repository root. Commit blocked for safety." >&2
+  exit 1
+}
+
+hook_script="$repo_root/hooks/pre-commit.cjs"
+
+if [ ! -f "$hook_script" ]; then
+  echo "COMMIT SINS: hooks/pre-commit.cjs is missing. Commit blocked for safety." >&2
+  exit 1
+fi
+
+exec node "$hook_script"
