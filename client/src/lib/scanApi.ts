@@ -166,6 +166,7 @@ export function normalizeScanResponse(
       durationMs: Math.max(0, Math.round(durationMs)),
     },
     findings,
+    
   };
 }
 

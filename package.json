@@ -9,7 +9,7 @@
     "dev:static": "vite --host 0.0.0.0 --port ${PORT:-3000} --strictPort",
     "build": "pnpm build:client && pnpm build:server",
     "build:client": "vite build",
-    "build:server": "esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/server.js",
+    "build:server": "esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --banner:js=\"import { createRequire } from 'node:module';const require=createRequire(import.meta.url);\" --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
     "start:api": "node backend/src/server.js",
     "check": "tsc --noEmit",

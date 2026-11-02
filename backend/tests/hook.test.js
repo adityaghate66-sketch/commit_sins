@@ -251,3 +251,71 @@ test('fails closed when the detection engine is missing', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('the installer adds an executable hook without touching another repository', () => {
+  const root = createRepository();
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'install-hooks.js')],
+      { cwd: root, encoding: 'utf8' }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+
+    const installed = path.join(root, '.git', 'hooks', 'pre-commit');
+    assert.ok(fs.existsSync(installed));
+    assert.match(fs.readFileSync(installed, 'utf8'), /COMMIT SINS pre-commit hook/);
+    assert.ok((fs.statSync(installed).mode & 0o111) !== 0, 'hook must be executable');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the installer refuses to overwrite an existing custom hook', () => {
+  const root = createRepository();
+  try {
+    const target = path.join(root, '.git', 'hooks', 'pre-commit');
+    const custom = '#!/bin/sh\necho custom hook\n';
+    fs.writeFileSync(target, custom, { mode: 0o755 });
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'install-hooks.js')],
+      { cwd: root, encoding: 'utf8' }
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /existing pre-commit hook/i);
+    assert.equal(fs.readFileSync(target, 'utf8'), custom, 'custom hook must be untouched');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the installer backs up a custom hook when forced', () => {
+  const root = createRepository();
+  try {
+    const hooksDirectory = path.join(root, '.git', 'hooks');
+    const target = path.join(hooksDirectory, 'pre-commit');
+    const custom = '#!/bin/sh\necho custom hook\n';
+    fs.writeFileSync(target, custom, { mode: 0o755 });
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(root, 'scripts', 'install-hooks.js'), '--force'],
+      { cwd: root, encoding: 'utf8' }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(fs.readFileSync(target, 'utf8'), /COMMIT SINS pre-commit hook/);
+
+    const backups = fs
+      .readdirSync(hooksDirectory)
+      .filter((name) => name.startsWith('pre-commit.backup-'));
+    assert.equal(backups.length, 1, 'one backup should be created');
+    assert.equal(fs.readFileSync(path.join(hooksDirectory, backups[0]), 'utf8'), custom);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

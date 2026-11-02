@@ -33,6 +33,37 @@ async function startServer() {
       createContext,
     })
   );
+  // Keep parser failures on the same safe JSON envelope as the standalone API.
+  // No stack trace, parser internals or submitted content reach the client.
+  app.use(
+    (
+      err: { type?: string; status?: number },
+      _req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (res.headersSent) return next(err);
+      if (err && err.type === "entity.too.large") {
+        return res.status(413).json({
+          error: {
+            code: "PAYLOAD_TOO_LARGE",
+            message: "Request content exceeds the allowed size.",
+          },
+        });
+      }
+      if (err && (err.type === "entity.parse.failed" || err.status === 400)) {
+        return res.status(400).json({
+          error: {
+            code: "INVALID_JSON",
+            message: "Request body must be valid JSON.",
+          },
+        });
+      }
+      return res.status(500).json({
+        error: { code: "INTERNAL_ERROR", message: "Unexpected server error." },
+      });
+    }
+  );
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
